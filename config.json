@@ -1,0 +1,10 @@
+{
+  "binaries": ["/usr/bin/curl"],
+  "filesystem_policies": {
+      "allowed_write_dirs": ["/tmp/curl_downloads/","/tmp/j/"]
+    },
+  "security_policies": {
+      "blocked_environment": ["PASSWORD","KEY","SECRET"]
+    }
+}
+
