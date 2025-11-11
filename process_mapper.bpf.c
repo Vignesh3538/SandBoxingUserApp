@@ -1,35 +1,22 @@
 // curl_mark.bpf.c
 // Compile:
-//   sudo clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I. \
-//       -c curl_mark.bpf.c -o curl_mark.bpf.o
+// sudo clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I. \
+//   -c curl_mark.bpf.c -o curl_mark.bpf.o
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
+#include <linux/errno.h>
 
-/* Keys/structs */
-struct inode_key {
-    __u64 dev;
-    __u64 ino;
-};
+struct inode_key { __u64 dev; __u64 ino; };
 
-/*
- * Explicitly padded version (16 bytes total):
- * [ tg_id (4B) | pad (4B) | start_time_ns (8B) ]
- * Ensures consistent alignment between producer and consumer programs.
- */
 struct proc_key {
     __u32 tgid;
-    __u32 pad;              // <-- explicit 4-byte padding
+    __u32 pad;
     __u64 start_time_ns;
 };
 
-/* ---------- inodepolicy_map ----------
- * Key:   inode_key { dev, ino }
- * Value: policy_id (u32)
- * This map is created and pinned manually from userspace.
- */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 64);
@@ -37,11 +24,6 @@ struct {
     __type(value, __u32);
 } inodepolicy_map SEC(".maps");
 
-/* ---------- proc_policy_map ----------
- * Key:   proc_key { tgid, pad=0, start_time }
- * Value: policy_id (u32)
- * Tracks which processes are managed by a policy.
- */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
@@ -49,11 +31,6 @@ struct {
     __type(value, __u32);
 } proc_policy_map SEC(".maps");
 
-/* ---------- proc_map ----------
- * New map keyed by tgid only for fast lookup by other BPF programs.
- * Key:   __u32 tgid
- * Value: __u32 policy_id (dummy)
- */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
@@ -61,87 +38,120 @@ struct {
     __type(value, __u32);
 } proc_map SEC(".maps");
 
-/* ========== LSM Hook ==========
- * Triggered on every execve() through bprm_check_security()
- * before the binary is executed.
- *
- * Behavior:
- *  - If the inode of the executing binary matches an entry in inodepolicy_map,
- *    insert an entry into proc_policy_map keyed by (tgid, start_time) -> policy_id.
- *  - Also insert (tgid -> policy_id) into proc_map for fast tgid-only lookups.
- *  - If proc_map insert fails after proc_policy_map succeed, roll back proc_policy_map.
- */
+/* env-block map: key=envname (16 bytes, null-padded), val=__u32 dummy */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16);
+    __type(key, char[32]);
+    __type(value, __u32);
+} block_env_arr SEC(".maps");
+
+
 SEC("lsm/bprm_check_security")
 int BPF_PROG(bprm_check, struct linux_binprm *bprm)
 {
     struct file *file = NULL;
-
-    /* 1) Get bprm->file pointer */
-    if (bpf_core_read(&file, sizeof(file), &bprm->file) < 0 || !file) {
+    if (bpf_core_read(&file, sizeof(file), &bprm->file) < 0 || !file)
         return 0;
-    }
 
-    /* 2) Read inode & device numbers */
-    __u64 ino = 0, dev = 0;
-    ino = BPF_CORE_READ(file, f_inode, i_ino);
-    dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+    __u64 ino = BPF_CORE_READ(file, f_inode, i_ino);
+    __u64 dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+    struct inode_key ik = { .dev = dev, .ino = ino };
 
-    /* 3) Build key for inodepolicy_map lookup */
-    struct inode_key ik = {
-        .dev = dev,
-        .ino = ino,
-    };
-
-    /* 4) Lookup policy */
     __u32 *policy_ptr = bpf_map_lookup_elem(&inodepolicy_map, &ik);
-    if (!policy_ptr) {
+    if (!policy_ptr)
         return 0;
-    }
-
     __u32 policy_id = *policy_ptr;
 
-    /* 5) Identify process (TGID, unique start_time) */
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    if (!task)
+        return 0;
+
+    /* --- ENV SCAN + BLOCK (robust against long strings) --- */
+struct mm_struct *mm = BPF_CORE_READ(task, mm);
+if (mm) {
+    unsigned long s = BPF_CORE_READ(mm, env_start);
+    unsigned long e = BPF_CORE_READ(mm, env_end);
+    if (s && e > s) {
+        #define MAXSCAN 70
+        #define NBUF 128   /* increase to hold long env names/values */
+        #define KEYSZ 32
+
+        unsigned long cur = s;
+        int loop = 0;
+        int env_idx = 0;
+
+        for (; loop < MAXSCAN && cur < e; loop++) {
+            char buf[NBUF];
+            /* read up to NBUF bytes from current position */
+            int got = bpf_probe_read_str(buf, sizeof(buf), (void *)cur);
+            if (got <= 0) break;
+
+            /* if truncated (no NUL in buffer), advance by got but DON'T treat as complete env */
+            bool truncated = false;
+            if (got == NBUF) {
+                truncated = true;
+            } else {
+                /* safety: if last byte is not NUL, also consider truncated */
+                if (buf[NBUF - 1] != '\0') truncated = true;
+            }
+
+            if (!truncated) {
+                /* full string available in buf (got includes terminating NUL) */
+                /* find name length (before '=' or NUL) */
+                int namelen = 0;
+                #pragma unroll
+                for (int i = 0; i < KEYSZ; i++) {
+                    char c = buf[i];
+                    if (c == '=' || c == '\0') { namelen = i; break; }
+                    if (i == KEYSZ - 1) namelen = KEYSZ; /* too long to match */
+                }
+
+                /* build zero-padded key (KEYSZ bytes) for lookup */
+                if (namelen > 0 && namelen < KEYSZ) {
+                    char key[KEYSZ];
+                    #pragma unroll
+                    for (int j = 0; j < KEYSZ; j++) {
+                        if (j < namelen) key[j] = buf[j];
+                        else key[j] = '\0';
+                    }
+
+                    __u32 *val = bpf_map_lookup_elem(&block_env_arr, &key);
+                    if (val) {
+                        bpf_printk("blocked env var: %s\n", key);
+                        #undef MAXSCAN
+                        #undef NBUF
+                        #undef KEYSZ
+                        return -EACCES;
+                    }
+                }
+
+                /* debug print the complete env string */
+                bpf_printk("env[%d]: %s\n", env_idx, buf);
+                env_idx++;
+            }
+
+            /* Advance `cur`: use `got` when non-zero; if truncated and got==NBUF, still advance by got.
+             * This will move through the long string until the iteration where buf contains the NUL.
+             * We guarded printing so partial chunks are not logged as separate env entries.
+             */
+            cur += (unsigned long)got;
+        }
+
+        #undef MAXSCAN
+        #undef NBUF
+        #undef KEYSZ
+    }
+}
+
+    /* --- process policy store --- */
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 tgid = pid_tgid >> 32;
-
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    if (!task) {
-        bpf_printk("[bprm_check] no task_struct for tgid=%u\n", tgid);
-        return 0;
-    }
-
     __u64 start_time = BPF_CORE_READ(task, start_time);
-    
-    bpf_printk("[bprm_check] matched policy=%u for tgid=%u start=%llu (dev=%llu ino=%llu)\n",
-               policy_id, tgid, (unsigned long long)start_time,
-               (unsigned long long)dev, (unsigned long long)ino);
 
-    /* 6) Store process policy mapping in proc_policy_map */
-    struct proc_key pk = {
-        .tgid = tgid,
-        .pad = 0, // ensure zero padding
-        .start_time_ns = start_time,
-    };
-
-    long ret = bpf_map_update_elem(&proc_policy_map, &pk, &policy_id, BPF_ANY);
-    if (ret != 0) {
-        bpf_printk("[bprm_check] failed to update proc_policy_map for tgid=%u err=%ld\n",
-                   tgid, ret);
-        return 0;
-    }
-
-    /* 7) Also store tgid->policy_id in proc_map */
-    __u32 tkey = tgid;
-    ret = bpf_map_update_elem(&proc_map, &tkey, &policy_id, BPF_ANY);
-    if (ret != 0) {
-        bpf_printk("[bprm_check] failed to update proc_map for tgid=%u err=%ld, rolling back proc_policy_map\n",
-                   tgid, ret);
-        bpf_map_delete_elem(&proc_policy_map, &pk);
-        return 0;
-    }
-
-    bpf_printk("[bprm_check] successfully inserted proc_policy_map and proc_map for tgid=%u policy=%u\n",
-               tgid, policy_id);
+    struct proc_key pk = { .tgid = tgid, .pad = 0, .start_time_ns = start_time };
+    bpf_map_update_elem(&proc_policy_map, &pk, &policy_id, BPF_ANY);
+    bpf_map_update_elem(&proc_map, &tgid, &policy_id, BPF_ANY);
 
     return 0;
 }

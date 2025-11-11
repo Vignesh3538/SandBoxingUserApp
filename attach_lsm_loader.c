@@ -38,13 +38,13 @@ static int g_fd_inodepolicy = -1;
 static int g_fd_proc_policy = -1;
 static int g_fd_proc = -1;
 static int g_fd_allow_wdir = -1;
-
+static int g_fd_block_env = -1;
 /* Pinned map paths - adjust if you pinned maps elsewhere */
 #define PIN_INODE_MAP      "/sys/fs/bpf/inodepolicy_map"
 #define PIN_PROC_POLICY    "/sys/fs/bpf/proc_policy_map"
 #define PIN_PROC_MAP       "/sys/fs/bpf/proc_map"
 #define PIN_ALLOW_WDIR_MAP "/sys/fs/bpf/allow_wdir_map"
-
+#define PIN_BLOCK_ENV_ARR "/sys/fs/bpf/block_env_arr"
 /* Pinned link paths */
 #define PIN_LINK_MAPPER    "/sys/fs/bpf/process_mapper"
 #define PIN_LINK_REMOVER   "/sys/fs/bpf/process_remover"
@@ -84,6 +84,7 @@ static void cleanup_and_exit(int signum)
     if (g_fd_proc_policy >= 0) { close(g_fd_proc_policy); g_fd_proc_policy = -1; }
     if (g_fd_proc >= 0) { close(g_fd_proc); g_fd_proc = -1; }
     if (g_fd_allow_wdir >= 0) { close(g_fd_allow_wdir); g_fd_allow_wdir = -1; }
+    if (g_fd_block_env >= 0) { close(g_fd_block_env); g_fd_block_env = -1; }
 
     fprintf(stderr, "[loader] done. exiting.\n");
     exit(0);
@@ -145,7 +146,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "ERROR: bpf_obj_get(%s) failed: %s\n", PIN_ALLOW_WDIR_MAP, strerror(errno));
         cleanup_and_exit(0);
     }
-
+    g_fd_block_env = bpf_obj_get(PIN_BLOCK_ENV_ARR);
+    if (g_fd_block_env < 0) {
+    fprintf(stderr, "ERROR: bpf_obj_get(%s) failed: %s\n", PIN_BLOCK_ENV_ARR, strerror(errno));
+    cleanup_and_exit(0);
+    }
     printf("-> opened pinned maps: inode=%d proc_policy=%d proc_map=%d allow_wdir=%d\n",
            g_fd_inodepolicy, g_fd_proc_policy, g_fd_proc, g_fd_allow_wdir);
 
@@ -155,7 +160,8 @@ int main(int argc, char **argv)
     if ((err = safe_reuse_map_fd(g_skel->maps.inodepolicy_map, g_fd_inodepolicy, "inodepolicy_map"))) goto fail;
     if ((err = safe_reuse_map_fd(g_skel->maps.proc_policy_map, g_fd_proc_policy, "proc_policy_map"))) goto fail;
     if ((err = safe_reuse_map_fd(g_skel->maps.proc_map, g_fd_proc, "proc_map"))) goto fail;
-
+    if ((err = safe_reuse_map_fd(g_skel->maps.block_env_arr, g_fd_block_env, "block_env_arr")) != 0) goto fail;
+    
     /* process_remover: proc_policy_map, proc_map */
     if ((err = safe_reuse_map_fd(g_remover->maps.proc_policy_map, g_fd_proc_policy, "proc_policy_map(remover)"))) goto fail;
     if ((err = safe_reuse_map_fd(g_remover->maps.proc_map, g_fd_proc, "proc_map(remover)"))) goto fail;
@@ -269,7 +275,7 @@ int main(int argc, char **argv)
     while (1) pause();
 */
 fail:
-    show_dmesg_tail();
+    //show_dmesg_tail();
     cleanup_and_exit(0);
     return 1;
 }

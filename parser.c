@@ -131,38 +131,36 @@ int main(int argc, char **argv) {
         fprintf(stderr, "No 'filesystem_policies.allowed_write_dirs' found in config.\n");
     }
 
-        /* ---------- STEP 3: security_policies.blocked_environment[] ---------- */
     int env_map_fd = bpf_obj_get("/sys/fs/bpf/block_env_arr");
     if (env_map_fd < 0) {
         perror("bpf_obj_get block_env_arr");
-        /* not fatal: continue cleaning up others */
     } else {
-        struct json_object *sec_policies, *blocked_env;
-        if (json_object_object_get_ex(parsed, "security_policies", &sec_policies) &&
-            json_object_object_get_ex(sec_policies, "blocked_environment", &blocked_env)) {
+    struct json_object *sec_policies, *blocked_env;
+    if (json_object_object_get_ex(parsed, "security_policies", &sec_policies) &&
+        json_object_object_get_ex(sec_policies, "blocked_environment", &blocked_env)) {
 
-            int env_count = json_object_array_length(blocked_env);
-            for (int i = 0; i < env_count && i < 16; i++) {
-                const char *env_name =
-                    json_object_get_string(json_object_array_get_idx(blocked_env, i));
-                if (!env_name)
-                    continue;
+        int env_count = json_object_array_length(blocked_env);
+        for (int i = 0; i < env_count && i < 32; i++) {
+            const char *env_name =
+                json_object_get_string(json_object_array_get_idx(blocked_env, i));
+            if (!env_name || env_name[0] == '\0')
+                continue;
 
-                __u32 index = i;
-                char value[16] = {0};
+            char key[32] = {0};
+            __u32 val = 1;
 
-                /* copy up to 15 chars, leaving at least one null */
-                snprintf(value, sizeof(value), "%.*s", 15, env_name);
+            /* copy up to 15 chars of env name (16th is '\0') */
+            snprintf(key, sizeof(key), "%.*s", 31, env_name);
 
-                if (bpf_map_update_elem(env_map_fd, &index, value, BPF_ANY) != 0) {
-                    perror("bpf_map_update_elem (block_env_arr)");
-                } else {
-                    printf("Added blocked env[%u] = '%s'\n", index, value);
-                }
+            if (bpf_map_update_elem(env_map_fd, key, &val, BPF_ANY) != 0) {
+                perror("bpf_map_update_elem (block_env_arr)");
+            } else {
+                printf("Added blocked env = '%s'\n", key);
             }
-        } else {
-            fprintf(stderr, "No 'security_policies.blocked_environment' found in config.\n");
         }
+    } else {
+        fprintf(stderr, "No 'security_policies.blocked_environment' found in config.\n");
+    }
     }
 
     json_object_put(parsed);
