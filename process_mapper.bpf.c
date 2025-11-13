@@ -50,6 +50,19 @@ struct {
 SEC("lsm/bprm_check_security")
 int BPF_PROG(bprm_check, struct linux_binprm *bprm)
 {
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 tgid = pid_tgid >> 32;
+    __u32 *policy_ptr0 = bpf_map_lookup_elem(&proc_map, &tgid);
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    if (!task)
+        return 0;
+    if (policy_ptr0) {
+        __u32 policy_id = *policy_ptr0;
+        bpf_printk("proc_map hit: tgid=%u policy=%u\n", tgid, policy_id);
+        goto policy_found;
+    }
+    
+    
     struct file *file = NULL;
     if (bpf_core_read(&file, sizeof(file), &bprm->file) < 0 || !file)
         return 0;
@@ -63,11 +76,10 @@ int BPF_PROG(bprm_check, struct linux_binprm *bprm)
         return 0;
     __u32 policy_id = *policy_ptr;
 
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    if (!task)
-        return 0;
+    
 
     /* --- ENV SCAN + BLOCK (robust against long strings) --- */
+policy_found:{
 struct mm_struct *mm = BPF_CORE_READ(task, mm);
 if (mm) {
     unsigned long s = BPF_CORE_READ(mm, env_start);
@@ -145,8 +157,7 @@ if (mm) {
 }
 
     /* --- process policy store --- */
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
+    
     __u64 start_time = BPF_CORE_READ(task, start_time);
 
     struct proc_key pk = { .tgid = tgid, .pad = 0, .start_time_ns = start_time };
@@ -154,6 +165,7 @@ if (mm) {
     bpf_map_update_elem(&proc_map, &tgid, &policy_id, BPF_ANY);
 
     return 0;
+    }
 }
 
 char LICENSE[] SEC("license") = "GPL";

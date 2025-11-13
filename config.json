@@ -5,6 +5,9 @@
     },
   "security_policies": {
       "blocked_environment": ["PASSWORD","KEY","SECRET"]
+    },
+  "network_policies": {
+      "allowed_domains": ["example.com", "iisc.ac.in"]
     }
 }
 
