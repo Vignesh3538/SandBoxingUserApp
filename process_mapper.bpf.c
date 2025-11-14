@@ -1,8 +1,3 @@
-// curl_mark.bpf.c
-// Compile:
-// sudo clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I. \
-//   -c curl_mark.bpf.c -o curl_mark.bpf.o
-
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
@@ -38,7 +33,6 @@ struct {
     __type(value, __u32);
 } proc_map SEC(".maps");
 
-/* env-block map: key=envname (16 bytes, null-padded), val=__u32 dummy */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 16);
@@ -46,23 +40,26 @@ struct {
     __type(value, __u32);
 } block_env_arr SEC(".maps");
 
-
 SEC("lsm/bprm_check_security")
 int BPF_PROG(bprm_check, struct linux_binprm *bprm)
 {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 tgid = pid_tgid >> 32;
-    __u32 *policy_ptr0 = bpf_map_lookup_elem(&proc_map, &tgid);
+
+    __u32 *policy_ptr;
+    __u32 policy_id;
+
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     if (!task)
         return 0;
-    if (policy_ptr0) {
-        __u32 policy_id = *policy_ptr0;
-        bpf_printk("proc_map hit: tgid=%u policy=%u\n", tgid, policy_id);
+
+    policy_ptr = bpf_map_lookup_elem(&proc_map, &tgid);
+    if (policy_ptr) {
+        policy_id = *policy_ptr;
+        bpf_printk("proc_map hit at [bprm_check_security]: tgid=%u policy=%u\n", tgid, policy_id);
         goto policy_found;
     }
-    
-    
+
     struct file *file = NULL;
     if (bpf_core_read(&file, sizeof(file), &bprm->file) < 0 || !file)
         return 0;
@@ -71,98 +68,87 @@ int BPF_PROG(bprm_check, struct linux_binprm *bprm)
     __u64 dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
     struct inode_key ik = { .dev = dev, .ino = ino };
 
-    __u32 *policy_ptr = bpf_map_lookup_elem(&inodepolicy_map, &ik);
+    policy_ptr = bpf_map_lookup_elem(&inodepolicy_map, &ik);
     if (!policy_ptr)
         return 0;
-    __u32 policy_id = *policy_ptr;
 
-    
+    policy_id = *policy_ptr;
 
-    /* --- ENV SCAN + BLOCK (robust against long strings) --- */
-policy_found:{
-struct mm_struct *mm = BPF_CORE_READ(task, mm);
-if (mm) {
-    unsigned long s = BPF_CORE_READ(mm, env_start);
-    unsigned long e = BPF_CORE_READ(mm, env_end);
-    if (s && e > s) {
-        #define MAXSCAN 70
-        #define NBUF 128   /* increase to hold long env names/values */
-        #define KEYSZ 32
+    struct mm_struct *mm = BPF_CORE_READ(task, mm);
+    if (mm) {
+        unsigned long s = BPF_CORE_READ(mm, env_start);
+        unsigned long e = BPF_CORE_READ(mm, env_end);
+        if (s && e > s) {
+            #define MAXSCAN 70
+            #define NBUF 128
+            #define KEYSZ 32
 
-        unsigned long cur = s;
-        int loop = 0;
-        int env_idx = 0;
+            unsigned long cur = s;
+            int loop = 0;
+            int env_idx = 0;
 
-        for (; loop < MAXSCAN && cur < e; loop++) {
-            char buf[NBUF];
-            /* read up to NBUF bytes from current position */
-            int got = bpf_probe_read_str(buf, sizeof(buf), (void *)cur);
-            if (got <= 0) break;
+            for (; loop < MAXSCAN && cur < e; loop++) {
+                char buf[NBUF];
+                int got = bpf_probe_read_str(buf, sizeof(buf), (void *)cur);
+                if (got <= 0) break;
 
-            /* if truncated (no NUL in buffer), advance by got but DON'T treat as complete env */
-            bool truncated = false;
-            if (got == NBUF) {
-                truncated = true;
-            } else {
-                /* safety: if last byte is not NUL, also consider truncated */
-                if (buf[NBUF - 1] != '\0') truncated = true;
-            }
-
-            if (!truncated) {
-                /* full string available in buf (got includes terminating NUL) */
-                /* find name length (before '=' or NUL) */
-                int namelen = 0;
-                #pragma unroll
-                for (int i = 0; i < KEYSZ; i++) {
-                    char c = buf[i];
-                    if (c == '=' || c == '\0') { namelen = i; break; }
-                    if (i == KEYSZ - 1) namelen = KEYSZ; /* too long to match */
+                bool truncated = false;
+                if (got == NBUF) {
+                    truncated = true;
+                } else {
+                    if (buf[NBUF - 1] != '\0') truncated = true;
                 }
 
-                /* build zero-padded key (KEYSZ bytes) for lookup */
-                if (namelen > 0 && namelen < KEYSZ) {
-                    char key[KEYSZ];
+                if (!truncated) {
+                    int namelen = 0;
                     #pragma unroll
-                    for (int j = 0; j < KEYSZ; j++) {
-                        if (j < namelen) key[j] = buf[j];
-                        else key[j] = '\0';
+                    for (int i = 0; i < KEYSZ; i++) {
+                        char c = buf[i];
+                        if (c == '=' || c == '\0') { namelen = i; break; }
+                        if (i == KEYSZ - 1) namelen = KEYSZ;
                     }
 
-                    __u32 *val = bpf_map_lookup_elem(&block_env_arr, &key);
-                    if (val) {
-                        bpf_printk("blocked env var: %s\n", key);
-                        #undef MAXSCAN
-                        #undef NBUF
-                        #undef KEYSZ
-                        return -EACCES;
+                    if (namelen > 0 && namelen < KEYSZ) {
+                        char key[KEYSZ];
+                        #pragma unroll
+                        for (int j = 0; j < KEYSZ; j++) {
+                            if (j < namelen) key[j] = buf[j];
+                            else key[j] = '\0';
+                        }
+
+                        __u32 *val = bpf_map_lookup_elem(&block_env_arr, &key);
+                        if (val) {
+                            bpf_printk("blocked env var: %s\n", key);
+                            #undef MAXSCAN
+                            #undef NBUF
+                            #undef KEYSZ
+                            return -EACCES;
+                        }
                     }
+
+                    //bpf_printk("env[%d]: %s\n", env_idx, buf);
+                    env_idx++;
                 }
 
-                /* debug print the complete env string */
-                bpf_printk("env[%d]: %s\n", env_idx, buf);
-                env_idx++;
+                cur += (unsigned long)got;
             }
 
-            /* Advance `cur`: use `got` when non-zero; if truncated and got==NBUF, still advance by got.
-             * This will move through the long string until the iteration where buf contains the NUL.
-             * We guarded printing so partial chunks are not logged as separate env entries.
-             */
-            cur += (unsigned long)got;
+            #undef MAXSCAN
+            #undef NBUF
+            #undef KEYSZ
         }
-
-        #undef MAXSCAN
-        #undef NBUF
-        #undef KEYSZ
     }
-}
 
-    /* --- process policy store --- */
-    
+    bpf_map_update_elem(&proc_map, &tgid, &policy_id, BPF_ANY);
+
+policy_found:{
     __u64 start_time = BPF_CORE_READ(task, start_time);
 
     struct proc_key pk = { .tgid = tgid, .pad = 0, .start_time_ns = start_time };
     bpf_map_update_elem(&proc_policy_map, &pk, &policy_id, BPF_ANY);
-    bpf_map_update_elem(&proc_map, &tgid, &policy_id, BPF_ANY);
+
+    bpf_printk("started tracking tgid=%u start_time_ns=%llu from [bprm_check_security]\n",
+               tgid, start_time);
 
     return 0;
     }

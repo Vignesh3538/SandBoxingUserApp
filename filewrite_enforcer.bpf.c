@@ -1,8 +1,3 @@
-// filewrite_enforcer.bpf.c
-// Compile:
-// clang -O2 -target bpf -g -c filewrite_enforcer.bpf.c -o filewrite_enforcer.bpf.o
-// sudo bpftool prog load filewrite_enforcer.bpf.o /sys/fs/bpf/filewrite_enforcer type lsm
-
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
@@ -11,8 +6,6 @@
 
 #define MAX_ANCESTOR_DEPTH 32
 #define FMODE_WRITE 0x2
-
-/* ---------------- Map Definitions ---------------- */
 
 struct inode_key {
     __u64 dev;
@@ -33,21 +26,12 @@ struct {
     __type(value, __u32);
 } allow_wdir_map SEC(".maps");
 
-/* ---------------- Helpers ---------------- */
-
-/*
- * Kernel internally stores s_dev as an encoded value.
- * We must re-encode it in the same way userspace encoded
- * using make_kernel_dev() ((major << 20) | minor).
- */
 static __always_inline __u64 normalize_dev(__u64 dev)
 {
     __u32 major_num = (dev >> 20) & 0xFFF; // 12 bits for major
     __u32 minor_num = dev & ((1 << 20) - 1); // 20 bits for minor
     return ((__u64)major_num << 20) | minor_num;
 }
-
-/* ---------------- Enforcement Hook ---------------- */
 
 SEC("lsm/file_open")
 int BPF_PROG(enforce_allowed_write_dirs, struct file *file)
@@ -91,17 +75,14 @@ int BPF_PROG(enforce_allowed_write_dirs, struct file *file)
         if (bpf_core_read(&raw_dev, sizeof(raw_dev), &sb->s_dev) < 0)
             break;
 
-        // Normalize dev like userspace encoding
         __u64 dev = normalize_dev(raw_dev);
 
         struct inode_key ik = { .dev = dev, .ino = ino };
 
-        bpf_printk("[DEBUG] tgid=%u depth=%d raw_dev=%llu norm_dev=%llu ino=%llu\n",
-                   tgid, depth, raw_dev, dev, ino);
-
+        
         __u32 *val = bpf_map_lookup_elem(&allow_wdir_map, &ik);
         if (val) {
-            bpf_printk("[ALLOW] tgid=%u matched allowed dir dev=%llu ino=%llu\n",
+            bpf_printk("[ALLOWED_FILE_WRITE] tgid=%u matched allowed dir dev=%llu ino=%llu\n",
                        tgid, dev, ino);
             return 0;
         }
@@ -115,7 +96,7 @@ int BPF_PROG(enforce_allowed_write_dirs, struct file *file)
         parent = next_parent;
     }
 
-    bpf_printk("[DENY] tgid=%u denied write-open\n", tgid);
+    bpf_printk("[DENIED_FILE_WRITE] tgid=%u denied write-open\n", tgid);
     return -EACCES;
 }
 
