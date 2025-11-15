@@ -9,9 +9,9 @@
 > **This project loads eBPF programs into the Linux kernel and attaches them to LSM security hooks.**  
 > **This modifies kernel behavior at runtime.**
 >
-> - It enforces sandbox rules  
-> - It can block file writes, process execution, network activity  
-> - It affects all matching processes on the system  
+> - It enforces sandbox rules monitored at kernel level  
+> - It can block file creation and writes, process execution, network activity for sandboxed apps  
+> - It affects all matching tasks for sandboxed apps on the system  
 > - Requires **root** permissions  
 > - Requires a kernel with **BPF-LSM support**  
 
@@ -20,7 +20,7 @@
 ## **Getting Started with eBPF**
 
 eBPF allows writing safe programs supporting dynamic in-kernel execution without recompiling or patching the kernel.  
-It enables security enforcement, and per-process sandboxing.  
+It enables security enforcement, and per-task sandboxing.  
 With BPF-LSM hooks, we can enforce custom security policies efficiently.
 
 ---
