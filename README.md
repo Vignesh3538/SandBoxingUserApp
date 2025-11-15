@@ -74,7 +74,7 @@ sudo apt-get install -y \
 
 ```bash
 git clone https://github.com/Vignesh3538/SandBoxingUserApp.git
-cd src
+cd SandBoxingUserApp/src
 make
 ```
 ---
