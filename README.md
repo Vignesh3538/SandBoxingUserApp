@@ -33,7 +33,7 @@ It defines things like:
 - Applications to be sandboxed
 - Allowed write directories  
 - Allowed network domains  
-- Denied env vars  
+- Denied environment vars  
 
 The parser reads this file and populates BPF maps accordingly.
 
@@ -74,7 +74,7 @@ sudo apt-get install -y \
 
 ```bash
 git clone https://github.com/Vignesh3538/SandBoxingUserApp.git
-cd src
+cd SandBoxingUserApp/src
 make
 ```
 ---
