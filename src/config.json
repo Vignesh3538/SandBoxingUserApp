@@ -1,6 +1,6 @@
 {
   "policy_version": "1.0",
-  "binaries": ["/usr/bin/curl"],
+  "binaries": ["/usr/bin/curl","/usr/bin/wget"],
   "filesystem_policies": {
       "allowed_write_dirs": ["/tmp/curl_downloads/"]
     },

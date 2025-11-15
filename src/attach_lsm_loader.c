@@ -40,7 +40,7 @@ static int g_fd_ip = -1;
 static int g_fd_loc_ip = -1;
 
 #define PIN_INODE_MAP      "/sys/fs/bpf/inodepolicy_map"
-#define PIN_PROC_POLICY    "/sys/fs/bpf/proc_policy_map"
+//#define PIN_PROC_POLICY    "/sys/fs/bpf/proc_policy_map"
 #define PIN_PROC_MAP       "/sys/fs/bpf/proc_map"
 #define PIN_ALLOW_WDIR_MAP "/sys/fs/bpf/allow_wdir_map"
 #define PIN_BLOCK_ENV_ARR  "/sys/fs/bpf/block_env_arr"
@@ -75,7 +75,7 @@ static void cleanup_and_exit(int signum)
     if (g_skel) { process_mapper_bpf__destroy(g_skel); g_skel = NULL; }
 
     if (g_fd_inodepolicy >= 0) { close(g_fd_inodepolicy); g_fd_inodepolicy = -1; }
-    if (g_fd_proc_policy >= 0) { close(g_fd_proc_policy); g_fd_proc_policy = -1; }
+    //if (g_fd_proc_policy >= 0) { close(g_fd_proc_policy); g_fd_proc_policy = -1; }
     if (g_fd_proc >= 0) { close(g_fd_proc); g_fd_proc = -1; }
     if (g_fd_allow_wdir >= 0) { close(g_fd_allow_wdir); g_fd_allow_wdir = -1; }
     if (g_fd_block_env >= 0) { close(g_fd_block_env); g_fd_block_env = -1; }
@@ -128,8 +128,8 @@ static int open_pinned_maps(void)
     g_fd_inodepolicy = bpf_obj_get(PIN_INODE_MAP);
     if (g_fd_inodepolicy < 0) { fprintf(stderr, "error: opening %s: %s\n", PIN_INODE_MAP, strerror(errno)); return -errno; }
 
-    g_fd_proc_policy = bpf_obj_get(PIN_PROC_POLICY);
-    if (g_fd_proc_policy < 0) { fprintf(stderr, "error: opening %s: %s\n", PIN_PROC_POLICY, strerror(errno)); return -errno; }
+    //g_fd_proc_policy = bpf_obj_get(PIN_PROC_POLICY);
+    //if (g_fd_proc_policy < 0) { fprintf(stderr, "error: opening %s: %s\n", PIN_PROC_POLICY, strerror(errno)); return -errno; }
 
     g_fd_proc = bpf_obj_get(PIN_PROC_MAP);
     if (g_fd_proc < 0) { fprintf(stderr, "error: opening %s: %s\n", PIN_PROC_MAP, strerror(errno)); return -errno; }
@@ -158,15 +158,15 @@ static int reuse_maps_for_skeletons(void)
 
     if ((err = safe_reuse_map_fd(g_skel->maps.inodepolicy_map, g_fd_inodepolicy,
                                  "inodepolicy_map(process_mapper)"))) return err;
-    if ((err = safe_reuse_map_fd(g_skel->maps.proc_policy_map, g_fd_proc_policy,
-                                 "proc_policy_map(process_mapper)"))) return err;
+    //if ((err = safe_reuse_map_fd(g_skel->maps.proc_policy_map, g_fd_proc_policy,
+                                 //"proc_policy_map(process_mapper)"))) return err;
     if ((err = safe_reuse_map_fd(g_skel->maps.proc_map, g_fd_proc,
                                  "proc_map(process_mapper)"))) return err;
     if ((err = safe_reuse_map_fd(g_skel->maps.block_env_arr, g_fd_block_env,
                                  "block_env_arr(process_mapper)"))) return err;
 
-    if ((err = safe_reuse_map_fd(g_remover->maps.proc_policy_map, g_fd_proc_policy,
-                                 "proc_policy_map(process_remover)"))) return err;
+    //if ((err = safe_reuse_map_fd(g_remover->maps.proc_policy_map, g_fd_proc_policy,
+                                 //"proc_policy_map(process_remover)"))) return err;
     if ((err = safe_reuse_map_fd(g_remover->maps.proc_map, g_fd_proc,
                                  "proc_map(process_remover)"))) return err;
 
@@ -187,8 +187,8 @@ static int reuse_maps_for_skeletons(void)
     if ((err = safe_reuse_map_fd(g_net->maps.loc_ip_map, g_fd_loc_ip,
                                  "loc_ip_map(netaccess_enforcer)"))) return err;
 
-    if ((err = safe_reuse_map_fd(g_child->maps.proc_policy_map, g_fd_proc_policy,
-                                 "proc_policy_map(child_process_mapper)"))) return err;
+    //if ((err = safe_reuse_map_fd(g_child->maps.proc_policy_map, g_fd_proc_policy,
+                                 //"proc_policy_map(child_process_mapper)"))) return err;
     
     if ((err = safe_reuse_map_fd(g_child->maps.proc_map, g_fd_proc,
                                  "proc_map(child_process_mapper)"))) return err;

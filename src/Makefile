@@ -17,7 +17,7 @@ BPF_SKELS = $(BPF_OBJS:.bpf.o=.skel.h)
 USER_PROGS = dom_ip_updater parser attach_lsm_loader detach_lsm_remover
 
 MAPS = dom_map ip_map loc_ip_map block_env_arr inodepolicy_map \
-       proc_policy_map allow_wdir_map proc_map
+       allow_wdir_map proc_map
 
 .PHONY: all clean maps bpf user attach run_parser
 
@@ -39,8 +39,6 @@ maps:
 			elif [ "$$m" = "block_env_arr" ]; then \
 				bpftool map create /sys/fs/bpf/$$m type hash key 32 value 4 entries 16 name $$m; \
 			elif [ "$$m" = "inodepolicy_map" ]; then \
-				bpftool map create /sys/fs/bpf/$$m type hash key 16 value 4 entries 64 name $$m; \
-			elif [ "$$m" = "proc_policy_map" ]; then \
 				bpftool map create /sys/fs/bpf/$$m type hash key 16 value 4 entries 4096 name $$m; \
 			elif [ "$$m" = "allow_wdir_map" ]; then \
 				bpftool map create /sys/fs/bpf/$$m type hash key 16 value 4 entries 64 name $$m; \

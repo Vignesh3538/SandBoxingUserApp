@@ -9,7 +9,7 @@
 #include <bpf/libbpf.h>
 #define PIN_DOM_MAP        "/sys/fs/bpf/dom_map"
 #define PIN_INODE_MAP      "/sys/fs/bpf/inodepolicy_map"
-#define PIN_PROC_POLICY    "/sys/fs/bpf/proc_policy_map"
+//#define PIN_PROC_POLICY    "/sys/fs/bpf/proc_policy_map"
 #define PIN_PROC_MAP       "/sys/fs/bpf/proc_map"
 #define PIN_ALLOW_WDIR_MAP "/sys/fs/bpf/allow_wdir_map"
 #define PIN_BLOCK_ENV_ARR  "/sys/fs/bpf/block_env_arr"
@@ -75,11 +75,11 @@ void cleanup_bpf_resources(void)
         printf("Unlinked %s\n", PIN_DOM_MAP);
     }
     
-    if (unlink(PIN_PROC_POLICY) < 0) {
+    /*if (unlink(PIN_PROC_POLICY) < 0) {
         perror("Error unlinking " PIN_PROC_POLICY);
     } else {
         printf("Unlinked %s\n", PIN_PROC_POLICY);
-    }
+    }*/
 
     if (unlink(PIN_PROC_MAP) < 0) {
         perror("Error unlinking " PIN_PROC_MAP);
